@@ -47,7 +47,7 @@ Los tests no necesitan Odoo: el original conecta recién en la primera llamada a
 
 ### Publicar una imagen
 
-Una etiqueta `servidor-v<versión>` corre los tests y, si pasan, publica `ghcr.io/wansoft-tech/mcp-cliente:<versión>`.
+Una etiqueta `servidor-v<versión>` corre los tests y, si pasan, publica `ghcr.io/wansoft-tech/mcp-cliente:<versión>`. También se puede publicar a mano desde Actions («Run workflow»): toma la versión de `servidor/pyproject.toml`.
 
 ```bash
 git tag servidor-v0.1.0 && git push origin servidor-v0.1.0
