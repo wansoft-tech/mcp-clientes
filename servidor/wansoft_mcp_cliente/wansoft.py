@@ -55,7 +55,7 @@ def registrar(app, api: ApiWansoft) -> None:
 
     @app.tool(name='wansoft_mis_proyectos', title='Mis proyectos con Wansoft', annotations=LECTURA)
     async def wansoft_mis_proyectos() -> dict:
-        """Los proyectos de la persona con Wansoft y sus alcances (objetivos): responsable, fecha de compromiso, si está en fecha o vencido, y cuántos entregables están hechos sobre el total."""
+        """Los proyectos de la persona con Wansoft: sus alcances (objetivos) con responsable, fecha de compromiso, si está en fecha o vencido y entregables hechos sobre el total, y los tipos de consulta que se pueden abrir en cada uno."""
         return await api.llamar('mis_proyectos')
 
     @app.tool(name='wansoft_mis_tareas', title='Mis tareas en Wansoft', annotations=LECTURA)
@@ -76,21 +76,20 @@ def registrar(app, api: ApiWansoft) -> None:
 
     @app.tool(name='wansoft_mi_equipo', title='Mi equipo en Wansoft', annotations=LECTURA)
     async def wansoft_mi_equipo(proyecto_id: Optional[int] = None) -> dict:
-        """Quién de Wansoft atiende cada módulo de sus proyectos. Da los rol_id y modulo_id para preparar una consulta."""
+        """Quién de Wansoft atiende cada tipo de consulta (área) en sus proyectos, y el gerente de cada proyecto."""
         return await api.llamar('mi_equipo', proyecto_id=proyecto_id)
 
     @app.tool(name='wansoft_preparar_consulta', title='Preparar una consulta a Wansoft', annotations=PREPARA)
     async def wansoft_preparar_consulta(proyecto_id: int, titulo: str, descripcion: str,
-                                        rol_id: Optional[int] = None,
-                                        modulo_id: Optional[int] = None) -> dict:
+                                        tipo_de_consulta: Optional[str] = None) -> dict:
         """Prepara el borrador de una consulta para el equipo de Wansoft. NO crea nada.
 
         Mostrale el borrador a la persona y esperá que lo apruebe. Recién entonces usá wansoft_confirmar_consulta con el identificador, que vence a los 15 minutos.
         titulo: una frase que diga qué pasa. descripcion: qué pasa, dónde y qué se esperaba.
-        rol_id y modulo_id: de wansoft_mi_equipo, obligatorios si el proyecto tiene equipo.
+        tipo_de_consulta: el área, uno de los tipos_de_consulta del proyecto en wansoft_mis_proyectos (por ejemplo «Operaciones - Inventario»; alcanza con «operaciones»). Obligatorio si el proyecto tiene tipos.
         """
         return await api.llamar('preparar_consulta', proyecto_id=proyecto_id, titulo=titulo,
-                                descripcion=descripcion, rol_id=rol_id, modulo_id=modulo_id)
+                                descripcion=descripcion, tipo_de_consulta=tipo_de_consulta)
 
     @app.tool(name='wansoft_confirmar_consulta', title='Confirmar una consulta a Wansoft', annotations=CREA)
     async def wansoft_confirmar_consulta(identificador: str) -> dict:
