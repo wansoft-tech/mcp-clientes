@@ -290,3 +290,49 @@ def test_sin_lista_y_sin_odoo_online_no_adivina(monkeypatch):
     monkeypatch.setattr(modulo.urllib.request, 'urlopen', sin_lista)
     with pytest.raises(ValueError):
         modulo.detectar_base({'ODOO_URL': 'https://erp.cliente.com', 'ODOO_DB': ''})
+
+
+class _Respuesta:
+    def __init__(self, status):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _abridor(resultado):
+    class Abridor:
+        def open(self, pedido, timeout=None):
+            if isinstance(resultado, Exception):
+                raise resultado
+            return _Respuesta(resultado)
+    return lambda *handlers: Abridor()
+
+
+def test_transporte_xmlrpc_si_redirige(monkeypatch):
+    import urllib.error
+    from wansoft_mcp_cliente import app as modulo
+    monkeypatch.setattr(modulo.urllib.request, 'build_opener',
+                        _abridor(urllib.error.HTTPError('u', 303, 'See Other', {}, None)))
+    entorno = {'ODOO_URL': 'https://nutralia.example'}
+    modulo.elegir_transporte(entorno)
+    assert entorno['ODOO_RPC_TRANSPORT'] == 'xmlrpc'
+
+
+def test_transporte_queda_en_auto_si_responde(monkeypatch):
+    from wansoft_mcp_cliente import app as modulo
+    monkeypatch.setattr(modulo.urllib.request, 'build_opener', _abridor(200))
+    entorno = {'ODOO_URL': 'https://odoo19.example'}
+    modulo.elegir_transporte(entorno)
+    assert 'ODOO_RPC_TRANSPORT' not in entorno
+
+
+def test_transporte_elegido_a_mano_no_se_toca(monkeypatch):
+    from wansoft_mcp_cliente import app as modulo
+    monkeypatch.setattr(modulo.urllib.request, 'build_opener', _abridor(OSError('no')))
+    entorno = {'ODOO_URL': 'https://x.example', 'ODOO_RPC_TRANSPORT': 'json2'}
+    modulo.elegir_transporte(entorno)
+    assert entorno['ODOO_RPC_TRANSPORT'] == 'json2'

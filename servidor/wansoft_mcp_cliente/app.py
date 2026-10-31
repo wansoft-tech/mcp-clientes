@@ -123,6 +123,34 @@ def detectar_base(entorno=os.environ, timeout=15) -> None:
     entorno['ODOO_DB'] = bases[0]
 
 
+class _SinRedirecciones(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def elegir_transporte(entorno=os.environ, timeout=15) -> None:
+    """XML-RPC si la base no ofrece JSON-2 de forma directa.
+
+    El original, en «auto», prueba JSON-2 (Odoo 19 o posterior) pidiendo
+    /web/version, y si Odoo lo redirige se detiene en vez de usar XML-RPC. Pasa
+    con las bases que tienen sitio web con idiomas: /web/version va a
+    /en/web/version. Si la ruta no responde directo con 200, se fija XML-RPC,
+    que anda en todas las versiones.
+    """
+    if (entorno.get('ODOO_RPC_TRANSPORT') or 'auto').strip().lower() != 'auto':
+        return
+    abridor = urllib.request.build_opener(_SinRedirecciones)
+    pedido = urllib.request.Request(entorno['ODOO_URL'].rstrip('/') + '/web/version',
+                                    headers={'Accept': 'application/json'})
+    try:
+        with abridor.open(pedido, timeout=timeout) as respuesta:
+            directo = respuesta.status == 200
+    except (OSError, ValueError):
+        directo = False
+    if not directo:
+        entorno['ODOO_RPC_TRANSPORT'] = 'xmlrpc'
+
+
 def forzar_solo_lectura(entorno=os.environ) -> None:
     configurar_original('lectura', entorno)
 
@@ -131,6 +159,7 @@ def armar_servidor() -> OdooMCPServer:
     perfil, nivel = perfil_y_nivel()
     configurar_original(nivel)
     detectar_base()
+    elegir_transporte()
     # load_config y no get_config: este lee el entorno una sola vez y lo
     # guarda, y el nivel se acaba de fijar en el entorno.
     config = load_config()
