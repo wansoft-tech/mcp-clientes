@@ -86,7 +86,7 @@ def registrar(app, api: ApiWansoft) -> None:
 
         Mostrale el borrador a la persona y esperá que lo apruebe. Recién entonces usá wansoft_confirmar_consulta con el identificador, que vence a los 15 minutos.
         titulo: una frase que diga qué pasa. descripcion: qué pasa, dónde y qué se esperaba.
-        tipo_de_consulta: el área, uno de los tipos_de_consulta del proyecto en wansoft_mis_proyectos (por ejemplo «Operaciones - Inventario»; alcanza con «operaciones»). Obligatorio si el proyecto tiene tipos.
+        tipo_de_consulta: el área, uno de los tipos_de_consulta del proyecto en wansoft_mis_proyectos (por ejemplo «Operaciones - Inventario»; alcanza con «operaciones»). Obligatorio si el proyecto tiene tipos. Si el pedido no deja claro el área, proponé la más probable y avisale a la persona en el borrador que la puede cambiar.
         """
         return await api.llamar('preparar_consulta', proyecto_id=proyecto_id, titulo=titulo,
                                 descripcion=descripcion, tipo_de_consulta=tipo_de_consulta)
