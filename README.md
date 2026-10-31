@@ -13,8 +13,9 @@ El diseño completo, con las decisiones y el paso a paso, está en `wansoft_addo
 
 Se apoya en [`mcp-server-odoo`](https://pypi.org/project/mcp-server-odoo/) 0.9.0 (licencia MPL 2.0) como dependencia, sin modificar sus archivos. Encima agrega:
 
+- **Perfil y nivel.** `MCP_PERFIL=cliente` (por defecto) con `MCP_NIVEL` `lectura` (por defecto), `escritura` (crear y modificar) o `metodos` (además, ejecutar acciones); borrar, nunca. `MCP_PERFIL=equipo`: todo, borrar incluido, sin herramientas de Wansoft. Lo que el nivel no permite no existe en el servidor.
 - **Clave del enlace.** Solo atiende `/<clave>/mcp`. Compara la huella SHA-256 de la clave con `MCP_LINK_SECRET_SHA256` en tiempo constante. Cualquier otra ruta o clave responde 404. `/health` queda abierto y responde `{"status": "ok"}`, sin más datos.
-- **Solo lectura forzada.** `ODOO_YOLO` se fuerza a `read` y se descarta `ODOO_MCP_ENABLE_METHOD_CALLS` aunque vengan en el entorno. Solo quedan las herramientas de una lista de permitidas (`app.py`, `LECTURA`); las de escritura no existen en el servidor.
+- **El nivel manda, no el entorno.** `ODOO_YOLO` y `ODOO_MCP_ENABLE_METHOD_CALLS` se fijan según el nivel aunque vengan otros valores, y solo quedan las herramientas de la lista de permitidas del nivel (`app.py`).
 - **Herramientas de Wansoft**, con prefijo `wansoft_`. No dependen de que la base del cliente responda: si su Odoo está caído, igual puede abrir una consulta.
 - **Instrucciones para Claude**, en español (`instrucciones.py`).
 - **Sin logs de acceso:** la ruta lleva la clave del enlace.
@@ -59,9 +60,11 @@ Un solo servicio en Easypanel, en el proyecto `clientes-mcp`, con dominio públi
 
 | Ruta | Hace |
 |---|---|
-| `POST /connections` | Crea o actualiza el servidor de una persona: servicio, imagen, variables, dominio y deploy. Espera hasta 20 segundos a que responda |
+| `POST /connections` | Crea o actualiza el servidor de una persona del cliente (`c-<id>`), con su nivel (`lectura` por defecto, `escritura` o `metodos`). Espera hasta 20 segundos a que responda |
+| `POST /connections/{id}/nivel` | Cambia el nivel sin pedir de nuevo la clave de API: lee las variables del servicio, reemplaza `MCP_NIVEL` y redespliega |
 | `GET /connections/{id}` | Si el servicio existe y responde |
 | `DELETE /connections/{id}` | Elimina el servicio, con su dominio. Repetirlo no falla |
+| `POST /equipo`, `GET` y `DELETE /equipo/{id}` | Lo mismo para el servidor del equipo de Wansoft sobre una base del cliente (`ce-<id>`): perfil `equipo`, acceso completo |
 | `GET /health` | `{"status": "ok"}`, sin firma |
 
 **Firma.** Cabeceras `X-Wansoft-Origen` (la dirección del Odoo que llama), `X-Wansoft-Fecha` (segundos Unix) y `X-Wansoft-Firma`: HMAC-SHA256 en hexadecimal de `<fecha>.<cuerpo>`, con el secreto de ese origen. Se rechazan las de más de 5 minutos.

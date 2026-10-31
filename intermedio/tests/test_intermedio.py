@@ -30,11 +30,14 @@ class PanelFalso:
         self.llamadas = []
         self.servicios = set()
         self.dominios = {}
+        self.envs = {}
 
     def leer(self, procedimiento, **entrada):
         self.llamadas.append(('leer', procedimiento, entrada))
         if procedimiento == 'domains.listDomains':
             return [{'host': h} for h in self.dominios.get(entrada['serviceName'], [])]
+        if procedimiento == 'services.app.inspectService':
+            return {'env': self.envs.get(entrada['serviceName'], '')}
         return []
 
     def escribir(self, procedimiento, **entrada):
@@ -43,6 +46,8 @@ class PanelFalso:
             self.servicios.add(entrada['serviceName'])
         if procedimiento == 'services.app.destroyService':
             self.servicios.discard(entrada['serviceName'])
+        if procedimiento == 'services.app.updateEnv':
+            self.envs[entrada['serviceName']] = entrada['env']
 
     def asegurar_proyecto(self, proyecto):
         self.escribir('projects.createProject', name=proyecto)
@@ -410,3 +415,76 @@ def test_error_orpc_trae_el_motivo():
     finally:
         servidor.shutdown()
     assert 'Input validation failed' in str(error.value)
+
+
+# -- Niveles y equipo -----------------------------------------------------------
+def _env_de(panel, servicio):
+    return dict(l.split('=', 1) for l in panel.envs[servicio].splitlines())
+
+
+def test_alta_arranca_en_lectura(cliente, panel):
+    cuerpo = alta()
+    cliente.post('/connections', content=cuerpo, headers=firmar(cuerpo))
+    env = _env_de(panel, 'c-12')
+    assert env['MCP_PERFIL'] == 'cliente'
+    assert env['MCP_NIVEL'] == 'lectura'
+
+
+def test_alta_con_nivel(cliente, panel):
+    datos = json.loads(alta())
+    datos['nivel'] = 'escritura'
+    cuerpo = json.dumps(datos).encode()
+    cliente.post('/connections', content=cuerpo, headers=firmar(cuerpo))
+    assert _env_de(panel, 'c-12')['MCP_NIVEL'] == 'escritura'
+
+
+def test_nivel_invalido(cliente, panel):
+    datos = json.loads(alta())
+    datos['nivel'] = 'todo'
+    cuerpo = json.dumps(datos).encode()
+    assert cliente.post('/connections', content=cuerpo, headers=firmar(cuerpo)).status_code == 400
+
+
+def test_cambiar_nivel_conserva_el_resto(cliente, panel):
+    cuerpo = alta()
+    cliente.post('/connections', content=cuerpo, headers=firmar(cuerpo))
+    antes = _env_de(panel, 'c-12')
+    pedido = json.dumps({'nivel': 'metodos'}).encode()
+    respuesta = cliente.post('/connections/12/nivel', content=pedido, headers=firmar(pedido))
+    assert respuesta.status_code == 200, respuesta.text
+    despues = _env_de(panel, 'c-12')
+    assert despues['MCP_NIVEL'] == 'metodos'
+    assert {k: v for k, v in despues.items() if k != 'MCP_NIVEL'} == \
+        {k: v for k, v in antes.items() if k != 'MCP_NIVEL'}
+    assert panel.procedimientos()[-1] == 'services.app.deployService'
+
+
+def test_cambiar_nivel_sin_firma(cliente, panel):
+    pedido = json.dumps({'nivel': 'metodos'}).encode()
+    assert cliente.post('/connections/12/nivel', content=pedido).status_code == 401
+
+
+def test_cambiar_nivel_de_un_servicio_que_no_es_nuestro(cliente, panel):
+    pedido = json.dumps({'nivel': 'metodos'}).encode()
+    respuesta = cliente.post('/connections/99/nivel', content=pedido, headers=firmar(pedido))
+    assert respuesta.status_code == 400
+    assert 'services.app.updateEnv' not in panel.procedimientos()
+
+
+def test_equipo(cliente, panel):
+    cuerpo = json.dumps({
+        'id': 3,
+        'odoo': {'url': 'https://cliente.odoo.com', 'db': 'cliente-staging', 'user': 'mcp@wansoft.tech',
+                 'api_key': 'clave-equipo'},
+        'link_secret_sha256': HUELLA,
+    }).encode()
+    respuesta = cliente.post('/equipo', content=cuerpo, headers=firmar(cuerpo))
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()['servicio'] == 'ce-3'
+    env = _env_de(panel, 'ce-3')
+    assert env['MCP_PERFIL'] == 'equipo'
+    assert 'WANSOFT_TOKEN' not in env and 'MCP_NIVEL' not in env
+    # El 3 del equipo no es la conexión 3 de un cliente.
+    assert cliente.delete('/connections/3', headers=firmar(b'')).json()['servicio'] == 'c-3'
+    assert cliente.delete('/equipo/3', headers=firmar(b'')).json()['servicio'] == 'ce-3'
+    assert 'ce-3' not in panel.servicios

@@ -89,9 +89,13 @@ async def _verificar(request, config):
     return origen, cuerpo, None
 
 
-def _nombre(config, origen, conexion_id):
+NIVELES = ('lectura', 'escritura', 'metodos')
+
+
+def _nombre(config, origen, conexion_id, perfil='cliente'):
+    """c-12 para una persona del cliente; ce-3 para la base 3 del equipo."""
     prefijo, _secreto = config.origenes[origen]
-    return '%s-%d' % (prefijo, conexion_id)
+    return '%s%s-%d' % (prefijo, 'e' if perfil == 'equipo' else '', conexion_id)
 
 
 def _env(valores):
@@ -112,12 +116,13 @@ def _saludable(host):
         return False
 
 
-def crear_o_actualizar(config, panel, origen, datos):
+def crear_o_actualizar(config, panel, origen, datos, perfil='cliente'):
     conexion_id = int(datos['id'])
     odoo = datos['odoo']
-    servicio = _nombre(config, origen, conexion_id)
+    servicio = _nombre(config, origen, conexion_id, perfil)
     host = '%s.%s' % (servicio, config.dominio)
-    env = _env({
+    variables = {
+        'MCP_PERFIL': perfil,
         'ODOO_URL': odoo['url'],
         'ODOO_DB': odoo['db'],
         'ODOO_USER': odoo['user'],
@@ -125,9 +130,17 @@ def crear_o_actualizar(config, panel, origen, datos):
         'ODOO_ALLOWED_COMPANIES': odoo.get('allowed_companies') or None,
         'ODOO_MCP_ALLOWED_HOSTS': host,
         'MCP_LINK_SECRET_SHA256': datos['link_secret_sha256'],
-        'WANSOFT_API_URL': '%s/wansoft/mcp/v1' % origen,
-        'WANSOFT_TOKEN': datos['wansoft_token'],
-    })
+    }
+    if perfil == 'cliente':
+        nivel = datos.get('nivel') or 'lectura'
+        if nivel not in NIVELES:
+            raise ValueError('nivel tiene que ser lectura, escritura o metodos.')
+        variables.update({
+            'MCP_NIVEL': nivel,
+            'WANSOFT_API_URL': '%s/wansoft/mcp/v1' % origen,
+            'WANSOFT_TOKEN': datos['wansoft_token'],
+        })
+    env = _env(variables)
     if not re.fullmatch(r'[0-9a-f]{64}', datos['link_secret_sha256']):
         raise ValueError('link_secret_sha256 tiene que ser una huella SHA-256.')
 
@@ -149,8 +162,30 @@ def crear_o_actualizar(config, panel, origen, datos):
     return {'servicio': servicio, 'host': host, 'listo': listo}
 
 
-def eliminar(config, panel, origen, conexion_id):
+def cambiar_nivel(config, panel, origen, conexion_id, nivel):
+    """Cambia el nivel de una persona sin pedirle de nuevo su clave de API.
+
+    Lee las variables del servicio, reemplaza solo MCP_NIVEL y vuelve a
+    desplegar. updateEnv reemplaza todas: por eso se manda el resto tal cual.
+    """
+    if nivel not in NIVELES:
+        raise ValueError('nivel tiene que ser lectura, escritura o metodos.')
     servicio = _nombre(config, origen, conexion_id)
+    datos = panel.leer('services.app.inspectService', projectName=config.proyecto,
+                       serviceName=servicio) or {}
+    lineas = [l for l in (datos.get('env') or '').splitlines()
+              if l.strip() and not l.startswith('MCP_NIVEL=')]
+    if not any(l.startswith('MCP_LINK_SECRET_SHA256=') for l in lineas):
+        raise ValueError('El servicio %s no tiene la configuración esperada.' % servicio)
+    lineas.append('MCP_NIVEL=%s' % nivel)
+    panel.escribir('services.app.updateEnv', projectName=config.proyecto,
+                   serviceName=servicio, env='\n'.join(lineas))
+    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    return {'servicio': servicio, 'nivel': nivel}
+
+
+def eliminar(config, panel, origen, conexion_id, perfil='cliente'):
+    servicio = _nombre(config, origen, conexion_id, perfil)
     if panel.existe_servicio(config.proyecto, servicio):
         # Los dominios del servicio se van con él.
         panel.escribir('services.app.destroyService', projectName=config.proyecto, serviceName=servicio)
@@ -164,41 +199,64 @@ def armar_app(config=None, panel=None):
     async def salud(request):
         return JSONResponse({'status': 'ok'})
 
-    async def conexiones(request):
+    def _falla(error):
+        _logger.warning('Falló Easypanel en %s: %s', error.procedimiento, error)
+        return _error('Easypanel rechazó %s' % error, FALLA_EASYPANEL)
+
+    def alta(perfil):
+        async def ruta(request):
+            origen, cuerpo, error = await _verificar(request, config)
+            if error:
+                return error
+            try:
+                datos = json.loads(cuerpo)
+                resultado = await run_in_threadpool(crear_o_actualizar, config, panel, origen, datos, perfil)
+            except (ValueError, KeyError, TypeError) as error:
+                return _error('Pedido inválido: %s' % error, 400)
+            except ErrorEasypanel as error:
+                return _falla(error)
+            return JSONResponse(resultado)
+        return ruta
+
+    def una(perfil):
+        async def ruta(request):
+            origen, _cuerpo, error = await _verificar(request, config)
+            if error:
+                return error
+            try:
+                conexion_id = int(request.path_params['conexion_id'])
+                if request.method == 'DELETE':
+                    resultado = await run_in_threadpool(eliminar, config, panel, origen, conexion_id, perfil)
+                else:
+                    servicio = _nombre(config, origen, conexion_id, perfil)
+                    existe = await run_in_threadpool(panel.existe_servicio, config.proyecto, servicio)
+                    host = '%s.%s' % (servicio, config.dominio)
+                    resultado = {'servicio': servicio, 'existe': existe,
+                                 'listo': existe and await run_in_threadpool(_saludable, host)}
+            except ErrorEasypanel as error:
+                return _falla(error)
+            return JSONResponse(resultado)
+        return ruta
+
+    async def nivel(request):
         origen, cuerpo, error = await _verificar(request, config)
         if error:
             return error
         try:
             datos = json.loads(cuerpo)
-            resultado = await run_in_threadpool(crear_o_actualizar, config, panel, origen, datos)
+            resultado = await run_in_threadpool(
+                cambiar_nivel, config, panel, origen, int(request.path_params['conexion_id']), datos['nivel'])
         except (ValueError, KeyError, TypeError) as error:
             return _error('Pedido inválido: %s' % error, 400)
         except ErrorEasypanel as error:
-            _logger.warning('Falló Easypanel en %s: %s', error.procedimiento, error)
-            return _error('Easypanel rechazó %s' % error, FALLA_EASYPANEL)
-        return JSONResponse(resultado)
-
-    async def conexion(request):
-        origen, _cuerpo, error = await _verificar(request, config)
-        if error:
-            return error
-        try:
-            conexion_id = int(request.path_params['conexion_id'])
-            if request.method == 'DELETE':
-                resultado = await run_in_threadpool(eliminar, config, panel, origen, conexion_id)
-            else:
-                servicio = _nombre(config, origen, conexion_id)
-                existe = await run_in_threadpool(panel.existe_servicio, config.proyecto, servicio)
-                host = '%s.%s' % (servicio, config.dominio)
-                resultado = {'servicio': servicio, 'existe': existe,
-                             'listo': existe and await run_in_threadpool(_saludable, host)}
-        except ErrorEasypanel as error:
-            _logger.warning('Falló Easypanel en %s: %s', error.procedimiento, error)
-            return _error('Easypanel rechazó %s' % error, FALLA_EASYPANEL)
+            return _falla(error)
         return JSONResponse(resultado)
 
     return Starlette(routes=[
         Route('/health', salud, methods=['GET']),
-        Route('/connections', conexiones, methods=['POST']),
-        Route('/connections/{conexion_id:int}', conexion, methods=['GET', 'DELETE']),
+        Route('/connections', alta('cliente'), methods=['POST']),
+        Route('/connections/{conexion_id:int}', una('cliente'), methods=['GET', 'DELETE']),
+        Route('/connections/{conexion_id:int}/nivel', nivel, methods=['POST']),
+        Route('/equipo', alta('equipo'), methods=['POST']),
+        Route('/equipo/{conexion_id:int}', una('equipo'), methods=['GET', 'DELETE']),
     ])
