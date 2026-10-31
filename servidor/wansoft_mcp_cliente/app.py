@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import os
+import urllib.parse
 import urllib.request
 
 from mcp_server_odoo.config import load_config
@@ -106,8 +107,16 @@ def detectar_base(entorno=os.environ, timeout=15) -> None:
     cuerpo = json.dumps({'jsonrpc': '2.0', 'method': 'call', 'params': {}}).encode()
     pedido = urllib.request.Request(url, data=cuerpo, method='POST',
                                     headers={'Content-Type': 'application/json'})
-    with urllib.request.urlopen(pedido, timeout=timeout) as respuesta:
-        bases = (json.loads(respuesta.read()) or {}).get('result') or []
+    try:
+        with urllib.request.urlopen(pedido, timeout=timeout) as respuesta:
+            bases = (json.loads(respuesta.read()) or {}).get('result') or []
+    except (OSError, ValueError):
+        bases = []
+    # Odoo Online: si no informa la lista, la base se llama como el subdominio
+    # (cliente-prueba.odoo.com → cliente-prueba).
+    host = urllib.parse.urlparse(entorno['ODOO_URL']).hostname or ''
+    if not bases and host.endswith('.odoo.com') and host.count('.') == 2:
+        bases = [host.split('.')[0]]
     if len(bases) != 1:
         raise ValueError('No se pudo detectar la base de %s: hay %d. Cargá ODOO_DB.'
                          % (entorno['ODOO_URL'], len(bases)))

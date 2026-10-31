@@ -1,6 +1,6 @@
 [project]
 name = "wansoft-mcp-provisioner"
-version = "0.2.1"
+version = "0.2.2"
 description = "Intermedio de Conectá con Claude: levanta y elimina en Easypanel los servidores MCP de cada persona"
 requires-python = ">=3.12"
 dependencies = [

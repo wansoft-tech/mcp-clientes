@@ -512,3 +512,26 @@ def test_reiniciar_algo_que_no_existe(cliente, panel):
 
 def test_reiniciar_sin_firma(cliente, panel):
     assert cliente.post('/equipo/4/reiniciar', content=b'').status_code == 401
+
+
+def test_cambiar_base_conserva_el_resto(cliente, panel):
+    cuerpo = json.dumps({
+        'id': 5, 'odoo': {'url': 'https://cliente-prueba1.odoo.com', 'db': '', 'user': 'soporte', 'api_key': 'k'},
+        'link_secret_sha256': HUELLA}).encode()
+    cliente.post('/equipo', content=cuerpo, headers=firmar(cuerpo))
+    antes = _env_de(panel, 'ce-5')
+    pedido = json.dumps({'url': 'https://cliente-prueba2.odoo.com/'}).encode()
+    respuesta = cliente.post('/equipo/5/base', content=pedido, headers=firmar(pedido))
+    assert respuesta.status_code == 200, respuesta.text
+    despues = _env_de(panel, 'ce-5')
+    assert despues['ODOO_URL'] == 'https://cliente-prueba2.odoo.com'
+    assert despues['ODOO_DB'] == ''
+    assert despues['ODOO_API_KEY'] == antes['ODOO_API_KEY']
+    assert despues['MCP_LINK_SECRET_SHA256'] == antes['MCP_LINK_SECRET_SHA256']
+    assert panel.procedimientos()[-1] == 'services.app.deployService'
+
+
+def test_cambiar_base_rechaza_direcciones_raras(cliente, panel):
+    for url in ('http://sin-https.odoo.com', 'https://a.odoo.com\nODOO_YOLO=true'):
+        pedido = json.dumps({'url': url}).encode()
+        assert cliente.post('/equipo/5/base', content=pedido, headers=firmar(pedido)).status_code == 400

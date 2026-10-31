@@ -1,6 +1,6 @@
 [project]
 name = "wansoft-mcp-cliente"
-version = "0.3.1"
+version = "0.3.2"
 description = "Servidor MCP de soporte para clientes de Wansoft: su base de Odoo en solo lectura y las herramientas de Wansoft"
 requires-python = ">=3.12"
 dependencies = [

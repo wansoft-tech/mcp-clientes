@@ -199,6 +199,32 @@ def reiniciar(config, panel, origen, conexion_id, perfil='equipo'):
     return {'servicio': servicio, 'reiniciado': True}
 
 
+def cambiar_base(config, panel, origen, conexion_id, url, db=None):
+    """Apunta el servidor del equipo a otra base, con el mismo enlace y sin la clave.
+
+    Para las copias de prueba de Odoo Online, que tienen otra dirección cada
+    vez: se reemplazan ODOO_URL y ODOO_DB (vacía: el servidor la detecta) y
+    se vuelve a desplegar. El resto de las variables no se toca. La clave de API
+    sigue en las variables: la copia conserva usuarios y claves.
+    """
+    if not str(url or '').startswith('https://') or any(c in str(url) for c in '\r\n '):
+        raise ValueError('La dirección tiene que empezar con https:// y no tener espacios.')
+    if db and any(c in str(db) for c in '\r\n '):
+        raise ValueError('El nombre de la base no puede tener espacios.')
+    servicio = _nombre(config, origen, conexion_id, 'equipo')
+    datos = panel.leer('services.app.inspectService', projectName=config.proyecto,
+                       serviceName=servicio) or {}
+    lineas = [l for l in (datos.get('env') or '').splitlines()
+              if l.strip() and not l.startswith(('ODOO_URL=', 'ODOO_DB='))]
+    if not any(l.startswith('MCP_LINK_SECRET_SHA256=') for l in lineas):
+        raise ValueError('El servicio %s no tiene la configuración esperada.' % servicio)
+    lineas += ['ODOO_URL=%s' % url.rstrip('/'), 'ODOO_DB=%s' % (db or '')]
+    panel.escribir('services.app.updateEnv', projectName=config.proyecto,
+                   serviceName=servicio, env='\n'.join(lineas))
+    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    return {'servicio': servicio, 'url': url.rstrip('/')}
+
+
 def eliminar(config, panel, origen, conexion_id, perfil='cliente'):
     servicio = _nombre(config, origen, conexion_id, perfil)
     if panel.existe_servicio(config.proyecto, servicio):
@@ -266,6 +292,21 @@ def armar_app(config=None, panel=None):
             return _falla(error)
         return JSONResponse(resultado)
 
+    async def base(request):
+        origen, cuerpo, error = await _verificar(request, config)
+        if error:
+            return error
+        try:
+            datos = json.loads(cuerpo)
+            resultado = await run_in_threadpool(
+                cambiar_base, config, panel, origen, int(request.path_params['conexion_id']),
+                datos['url'], datos.get('db'))
+        except (ValueError, KeyError, TypeError) as error:
+            return _error('Pedido inválido: %s' % error, 400)
+        except ErrorEasypanel as error:
+            return _falla(error)
+        return JSONResponse(resultado)
+
     async def nivel(request):
         origen, cuerpo, error = await _verificar(request, config)
         if error:
@@ -288,4 +329,5 @@ def armar_app(config=None, panel=None):
         Route('/equipo', alta('equipo'), methods=['POST']),
         Route('/equipo/{conexion_id:int}', una('equipo'), methods=['GET', 'DELETE']),
         Route('/equipo/{conexion_id:int}/reiniciar', reinicio, methods=['POST']),
+        Route('/equipo/{conexion_id:int}/base', base, methods=['POST']),
     ])

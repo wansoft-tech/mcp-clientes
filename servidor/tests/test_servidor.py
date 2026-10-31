@@ -271,3 +271,22 @@ def test_varias_bases_no_adivina():
             detectar_base({'ODOO_URL': 'http://127.0.0.1:%d' % odoo.server_port, 'ODOO_DB': 'auto'})
     finally:
         odoo.shutdown()
+
+
+def test_odoo_online_usa_el_subdominio(monkeypatch):
+    from wansoft_mcp_cliente import app as modulo
+    def sin_lista(*a, **k):
+        raise OSError('lista cerrada')
+    monkeypatch.setattr(modulo.urllib.request, 'urlopen', sin_lista)
+    entorno = {'ODOO_URL': 'https://assist-prueba2.odoo.com', 'ODOO_DB': ''}
+    modulo.detectar_base(entorno)
+    assert entorno['ODOO_DB'] == 'assist-prueba2'
+
+
+def test_sin_lista_y_sin_odoo_online_no_adivina(monkeypatch):
+    from wansoft_mcp_cliente import app as modulo
+    def sin_lista(*a, **k):
+        raise OSError('lista cerrada')
+    monkeypatch.setattr(modulo.urllib.request, 'urlopen', sin_lista)
+    with pytest.raises(ValueError):
+        modulo.detectar_base({'ODOO_URL': 'https://erp.cliente.com', 'ODOO_DB': ''})
