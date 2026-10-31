@@ -327,7 +327,7 @@ def test_formato_sin_superjson():
         panel.escribir('services.app.deployService', projectName='clientes-mcp', serviceName='c-1')
     finally:
         servidor.shutdown()
-    assert panel.superjson is False
+    assert panel.protocolo == 'trpc'
     # El proyecto existente se reconoce y no se intenta crear.
     assert not [p for p in PanelPlano.pedidos if p[1].endswith('createProject')]
     assert ('GET', '/api/trpc/services.app.inspectService',
@@ -340,9 +340,73 @@ def test_error_sin_superjson_trae_el_motivo():
     threading.Thread(target=servidor.serve_forever, daemon=True).start()
     try:
         panel = Easypanel('http://127.0.0.1:%d' % servidor.server_port, 't')
-        panel.superjson = True  # fuerza el formato equivocado
+        panel.protocolo = 'trpc-superjson'  # fuerza el formato equivocado
         with pytest.raises(ErrorEasypanel) as error:
             panel.escribir('services.app.deployService', projectName='p', serviceName='s')
     finally:
         servidor.shutdown()
     assert 'Invalid input' in str(error.value)
+
+
+class PanelOrpc(BaseHTTPRequestHandler):
+    """Easypanel con oRPC: {"json": ...} en la raíz, entrada envuelta y POST."""
+    pedidos = []
+
+    def _responder(self, status, datos):
+        cuerpo = json.dumps(datos).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(cuerpo)))
+        self.end_headers()
+        self.wfile.write(cuerpo)
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        PanelOrpc.pedidos.append(('GET', url.path, None))
+        if 'input' in url.query or 'data' in url.query:
+            return self._responder(400, {'json': {'message': 'Input validation failed'}})
+        self._responder(200, {'json': [{'name': 'clientes-mcp'}], 'meta': []})
+
+    def do_POST(self):
+        cuerpo = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        PanelOrpc.pedidos.append(('POST', self.path, cuerpo))
+        if 'json' not in cuerpo:
+            return self._responder(400, {'json': {'defined': False, 'code': 'BAD_REQUEST', 'status': 400,
+                                                  'message': 'Input validation failed'}})
+        if self.path.endswith('inspectService'):
+            return self._responder(404, {'json': {'message': 'Service not found'}})
+        self._responder(200, {'json': None, 'meta': []})
+
+    def log_message(self, *args):
+        pass
+
+
+def test_formato_orpc():
+    servidor = HTTPServer(('127.0.0.1', 0), PanelOrpc)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    try:
+        panel = Easypanel('http://127.0.0.1:%d' % servidor.server_port, 't')
+        panel.asegurar_proyecto('clientes-mcp')
+        assert not panel.existe_servicio('clientes-mcp', 'c-1')
+        panel.escribir('services.app.createService', projectName='clientes-mcp', serviceName='c-1')
+    finally:
+        servidor.shutdown()
+    assert panel.protocolo == 'orpc'
+    assert not [p for p in PanelOrpc.pedidos if p[1].endswith('createProject')]
+    # La lectura con entrada va por POST y envuelta.
+    assert ('POST', '/api/trpc/services.app.inspectService',
+            {'json': {'projectName': 'clientes-mcp', 'serviceName': 'c-1'}}) in PanelOrpc.pedidos
+    assert PanelOrpc.pedidos[-1][2] == {'json': {'projectName': 'clientes-mcp', 'serviceName': 'c-1'}}
+
+
+def test_error_orpc_trae_el_motivo():
+    servidor = HTTPServer(('127.0.0.1', 0), PanelOrpc)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    try:
+        panel = Easypanel('http://127.0.0.1:%d' % servidor.server_port, 't')
+        panel.protocolo = 'trpc'  # fuerza el formato equivocado
+        with pytest.raises(ErrorEasypanel) as error:
+            panel.escribir('projects.createProject', name='x')
+    finally:
+        servidor.shutdown()
+    assert 'Input validation failed' in str(error.value)
