@@ -207,7 +207,8 @@ class PanelHttp(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
-        entrada = json.loads(parse_qs(url.query)['input'][0])
+        consulta = parse_qs(url.query)
+        entrada = json.loads(consulta['input'][0]) if 'input' in consulta else None
         PanelHttp.pedidos.append(('GET', url.path, entrada, self.headers.get('Authorization')))
         if url.path.endswith('inspectService'):
             return self._responder(404, {'error': {'json': {'message': 'Service not found'}}})
@@ -234,7 +235,8 @@ def test_formato_trpc():
         servidor.shutdown()
     metodo, ruta, entrada, auth = PanelHttp.pedidos[0]
     assert (metodo, ruta) == ('GET', '/api/trpc/projects.listProjects')
-    assert entrada == {'json': {}}
+    # La primera lectura va sin entrada: anda igual con o sin superjson.
+    assert entrada is None
     assert auth == 'Bearer token-panel'
     # El proyecto ya existía: no se crea de nuevo.
     assert not [p for p in PanelHttp.pedidos if p[1].endswith('createProject')]
@@ -281,3 +283,66 @@ def test_falla_de_easypanel_llega_con_el_motivo(config, monkeypatch):
     respuesta = cliente.post('/connections', content=cuerpo, headers=firmar(cuerpo))
     assert respuesta.status_code == 424
     assert 'projects.listProjects' in respuesta.json()['error']
+
+
+class PanelPlano(BaseHTTPRequestHandler):
+    """Easypanel sin superjson: entrada y respuesta sin el sobre {"json": ...}."""
+    pedidos = []
+
+    def _responder(self, status, datos):
+        cuerpo = json.dumps(datos).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(cuerpo)))
+        self.end_headers()
+        self.wfile.write(cuerpo)
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        consulta = parse_qs(url.query)
+        entrada = json.loads(consulta['input'][0]) if 'input' in consulta else None
+        PanelPlano.pedidos.append(('GET', url.path, entrada))
+        if url.path.endswith('listProjects'):
+            return self._responder(200, {'result': {'data': [{'name': 'clientes-mcp'}]}})
+        self._responder(200, {'result': {'data': {'name': 'c-1'}}})
+
+    def do_POST(self):
+        cuerpo = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        PanelPlano.pedidos.append(('POST', self.path, cuerpo))
+        if 'json' in cuerpo:
+            return self._responder(400, {'error': {'message': 'Invalid input', 'code': -32600}})
+        self._responder(200, {'result': {'data': None}})
+
+    def log_message(self, *args):
+        pass
+
+
+def test_formato_sin_superjson():
+    servidor = HTTPServer(('127.0.0.1', 0), PanelPlano)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    try:
+        panel = Easypanel('http://127.0.0.1:%d' % servidor.server_port, 't')
+        panel.asegurar_proyecto('clientes-mcp')
+        assert panel.existe_servicio('clientes-mcp', 'c-1')
+        panel.escribir('services.app.deployService', projectName='clientes-mcp', serviceName='c-1')
+    finally:
+        servidor.shutdown()
+    assert panel.superjson is False
+    # El proyecto existente se reconoce y no se intenta crear.
+    assert not [p for p in PanelPlano.pedidos if p[1].endswith('createProject')]
+    assert ('GET', '/api/trpc/services.app.inspectService',
+            {'projectName': 'clientes-mcp', 'serviceName': 'c-1'}) in PanelPlano.pedidos
+    assert PanelPlano.pedidos[-1][2] == {'projectName': 'clientes-mcp', 'serviceName': 'c-1'}
+
+
+def test_error_sin_superjson_trae_el_motivo():
+    servidor = HTTPServer(('127.0.0.1', 0), PanelPlano)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    try:
+        panel = Easypanel('http://127.0.0.1:%d' % servidor.server_port, 't')
+        panel.superjson = True  # fuerza el formato equivocado
+        with pytest.raises(ErrorEasypanel) as error:
+            panel.escribir('services.app.deployService', projectName='p', serviceName='s')
+    finally:
+        servidor.shutdown()
+    assert 'Invalid input' in str(error.value)
