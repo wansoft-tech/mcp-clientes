@@ -1,0 +1,26 @@
+[project]
+name = "puerta-wansoft"
+version = "0.0.1"
+description = "Prueba de concepto de la puerta con inicio de sesión del conector «Wansoft»"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp==2.3.0",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=1.0"]
+
+[project.scripts]
+puerta-wansoft = "puerta_wansoft.__main__:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["puerta_wansoft"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

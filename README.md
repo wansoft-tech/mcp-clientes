@@ -85,3 +85,23 @@ Un solo servicio en Easypanel, en el proyecto `clientes-mcp`, con dominio públi
 | `ORIGENES` | Una línea por Odoo: `<url> <prefijo> <secreto>`, por ejemplo `https://gnbsas.odoo.com c <secreto>`. Secretos de 32 caracteres o más |
 
 Nunca registra cuerpos ni variables: llevan la clave de API del cliente.
+
+## Puerta (prueba de concepto)
+
+`puerta/`: prueba de concepto de la entrada única con inicio de sesión del
+conector «Wansoft» (diseño §9 ter en `wansoft_addons/docs/mcp-soporte-clientes.md`).
+Servidor de autorización OAuth 2.1 (PKCE, registro dinámico) con el SDK de MCP
+y una sola herramienta, `quien_soy`. El inicio de sesión es una página con una
+clave fija: no toca Odoo ni servidores de clientes. Imagen
+`ghcr.io/wansoft-tech/mcp-puerta:<versión>`.
+
+| Variable | Qué es |
+|---|---|
+| `PUERTA_URL` | Su dirección pública, sin barra final: `https://poc.mcp.wansoft.tech` |
+| `PUERTA_SECRETO` | Al menos 32 caracteres al azar. Firma códigos y credenciales |
+| `PUERTA_POC_CLAVE` | La clave de la página de inicio de sesión de la prueba |
+| `PUERTA_POC_SEGUNDOS` | Duración de la credencial. 300 por defecto, para ver la renovación |
+| `PUERTA_CLIENTES` | Archivo de clientes registrados. `/data/clientes.json` por defecto: montá un volumen en `/data` |
+
+`GET /poc/eventos` con la cabecera `X-Clave: <PUERTA_POC_CLAVE>` muestra lo que
+pasó (registro, inicio de sesión, canje, renovaciones), sin credenciales.
