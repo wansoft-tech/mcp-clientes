@@ -267,3 +267,17 @@ def test_dominio_existente_no_se_duplica():
 
     Fijo('http://panel', 't').asegurar_dominio('p', 'c-1', 'c-1.mcp.wansoft.tech', 8000)
     assert llamadas == []
+
+
+def test_falla_de_easypanel_llega_con_el_motivo(config, monkeypatch):
+    """No 5xx: el proxy de Easypanel taparía el motivo con su página de error."""
+    class Caido(PanelFalso):
+        def asegurar_proyecto(self, proyecto):
+            raise ErrorEasypanel('projects.listProjects', 'el panel no respondió', None)
+
+    monkeypatch.setattr(modulo, '_saludable', lambda host: True)
+    cliente = TestClient(armar_app(config, Caido()))
+    cuerpo = alta()
+    respuesta = cliente.post('/connections', content=cuerpo, headers=firmar(cuerpo))
+    assert respuesta.status_code == 424
+    assert 'projects.listProjects' in respuesta.json()['error']

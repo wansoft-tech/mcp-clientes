@@ -31,6 +31,10 @@ from .easypanel import Easypanel, ErrorEasypanel
 _logger = logging.getLogger('provisioner')
 
 VENTANA_FIRMA = 300
+# Cuando falla Easypanel se responde 424 y no 502: el proxy de Easypanel
+# reemplaza las respuestas 5xx de un servicio por su propia página de error, y
+# el motivo no llegaría nunca a Odoo.
+FALLA_EASYPANEL = 424
 PUERTO_SERVIDOR = 8000
 ESPERA_SALUD = 20
 
@@ -170,8 +174,8 @@ def armar_app(config=None, panel=None):
         except (ValueError, KeyError, TypeError) as error:
             return _error('Pedido inválido: %s' % error, 400)
         except ErrorEasypanel as error:
-            _logger.warning('Falló Easypanel en %s', error.procedimiento)
-            return _error('Easypanel rechazó %s: %s' % (error.procedimiento, error), 502)
+            _logger.warning('Falló Easypanel en %s: %s', error.procedimiento, error)
+            return _error('Easypanel rechazó %s' % error, FALLA_EASYPANEL)
         return JSONResponse(resultado)
 
     async def conexion(request):
@@ -189,8 +193,8 @@ def armar_app(config=None, panel=None):
                 resultado = {'servicio': servicio, 'existe': existe,
                              'listo': existe and await run_in_threadpool(_saludable, host)}
         except ErrorEasypanel as error:
-            _logger.warning('Falló Easypanel en %s', error.procedimiento)
-            return _error('Easypanel rechazó %s: %s' % (error.procedimiento, error), 502)
+            _logger.warning('Falló Easypanel en %s: %s', error.procedimiento, error)
+            return _error('Easypanel rechazó %s' % error, FALLA_EASYPANEL)
         return JSONResponse(resultado)
 
     return Starlette(routes=[
