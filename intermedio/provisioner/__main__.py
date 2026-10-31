@@ -9,10 +9,12 @@ from .app import armar_app
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    # PROVISIONER_PORT y no PORT: Easypanel le pone PORT=80 a toda app, y el
+    # dominio y el chequeo de salud esperan el 8000.
     uvicorn.run(
         armar_app(),
-        host=os.environ.get('HOST', '0.0.0.0'),
-        port=int(os.environ.get('PORT', '8000')),
+        host=os.environ.get('PROVISIONER_HOST', '0.0.0.0'),
+        port=int(os.environ.get('PROVISIONER_PORT', '8000')),
         proxy_headers=True,
         forwarded_allow_ips='*',
     )
