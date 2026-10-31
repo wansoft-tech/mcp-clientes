@@ -86,22 +86,26 @@ Un solo servicio en Easypanel, en el proyecto `clientes-mcp`, con dominio públi
 
 Nunca registra cuerpos ni variables: llevan la clave de API del cliente.
 
-## Puerta (prueba de concepto)
+## Puerta
 
-`puerta/`: prueba de concepto de la entrada única con inicio de sesión del
-conector «Wansoft» (diseño §9 ter en `wansoft_addons/docs/mcp-soporte-clientes.md`).
-Servidor de autorización OAuth 2.1 (PKCE, registro dinámico) con el SDK de MCP
-y una sola herramienta, `quien_soy`. El inicio de sesión es una página con una
-clave fija: no toca Odoo ni servidores de clientes. Imagen
+`puerta/`: la entrada única del conector «Wansoft» (diseño §9 ter en
+`wansoft_addons/docs/mcp-soporte-clientes.md`). Un solo conector para todos los
+clientes: la persona entra con su usuario del portal de Wansoft y la puerta
+reenvía cada pedido a su servidor. Servidor de autorización OAuth 2.1 (PKCE,
+registro dinámico) sobre el SDK de MCP. No guarda códigos ni credenciales: los
+firma. Credencial de 1 hora; la renovación le pregunta a Odoo si la conexión
+sigue activa y da un plazo nuevo de 90 días. Imagen
 `ghcr.io/wansoft-tech/mcp-puerta:<versión>`.
 
 | Variable | Qué es |
 |---|---|
-| `PUERTA_URL` | Su dirección pública, sin barra final: `https://poc.mcp.wansoft.tech` |
-| `PUERTA_SECRETO` | Al menos 32 caracteres al azar. Firma códigos y credenciales |
-| `PUERTA_POC_CLAVE` | La clave de la página de inicio de sesión de la prueba |
-| `PUERTA_POC_SEGUNDOS` | Duración de la credencial. 300 por defecto, para ver la renovación |
-| `PUERTA_CLIENTES` | Archivo de clientes registrados. `/data/clientes.json` por defecto: montá un volumen en `/data` |
+| `PUERTA_URL` | Su dirección pública, sin barra final: `https://clientes.mcp.wansoft.tech` |
+| `PUERTA_SECRETO` | Al menos 32 caracteres al azar. Firma lo que emite la puerta. Solo lo tiene la puerta |
+| `ODOO_URL` | El Odoo de Wansoft: `https://gnbsas.odoo.com` (o el de staging, para la puerta de staging) |
+| `PUERTA_ODOO_SECRETO` | Al menos 32 caracteres, **distinto** del anterior. El mismo valor va en el parámetro `wansoft_claude_connect.puerta_secret` de ese Odoo. Firma lo que se dicen Odoo y la puerta, y de él se deriva la clave del servidor de cada persona |
+| `PUERTA_DESTINO` | Opcional. Cómo llegar al servidor de la persona. Por defecto `https://{host}`, su dominio público |
+| `PUERTA_CLIENTES` | Archivo de clientes registrados (claude.ai). `/data/clientes.json` por defecto: montá un volumen en `/data` |
 
-`GET /poc/eventos` con la cabecera `X-Clave: <PUERTA_POC_CLAVE>` muestra lo que
-pasó (registro, inicio de sesión, canje, renovaciones), sin credenciales.
+El servidor de cada persona y el intermedio no cambian: Odoo calcula la clave
+del enlace a partir de `PUERTA_ODOO_SECRETO` y la puerta la vuelve a calcular
+para reenviar. Nadie la ve ni la guarda.

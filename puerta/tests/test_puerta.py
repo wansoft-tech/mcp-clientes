@@ -3,139 +3,172 @@ import contextlib
 import hashlib
 import json
 import secrets
-import time
 from urllib.parse import parse_qs, urlparse
 
 import httpx2 as httpx
-import pytest
 
 from puerta_wansoft.app import Config, armar
-from puerta_wansoft.firmas import firmar, leer
+from puerta_wansoft.firmas import clave_del_enlace, firma_hex, firmar, leer
 
-URL = 'https://poc.mcp.example'
+URL = 'https://clientes.mcp.example'
+ODOO = 'https://odoo.example'
 CALLBACK = 'https://claude.ai/api/mcp/auth_callback'
+SECRETO_ODOO = b'o' * 40
+HOST = 'c-7.mcp.example'
 
 
-@pytest.fixture
+class Mundo:
+    """Odoo y el servidor de la persona, de mentira."""
+
+    def __init__(self):
+        self.activa = True
+        self.servidor_existe = True
+        self.pedidos = []
+
+    def __call__(self, request: httpx.Request):
+        self.pedidos.append(request)
+        if request.url.host == 'odoo.example':
+            fecha = request.headers['x-wansoft-fecha']
+            assert request.headers['x-wansoft-firma'] == firma_hex(SECRETO_ODOO, fecha, request.content)
+            return httpx.Response(200, json={'activa': self.activa, 'host': HOST if self.activa else None})
+        assert request.url.host == HOST
+        if not self.servidor_existe:
+            return httpx.Response(404, json={'error': 'No encontrado'})
+        assert request.url.path == '/%s/mcp' % clave_del_enlace(SECRETO_ODOO, 7)
+        assert 'authorization' not in request.headers
+        cuerpo = json.loads(request.content)
+        return httpx.Response(200, headers={'content-type': 'application/json', 'mcp-session-id': 's1'},
+                              json={'jsonrpc': '2.0', 'id': cuerpo.get('id'), 'result': {'ok': True}})
+
+
 def entorno(tmp_path):
-    return {'PUERTA_URL': URL, 'PUERTA_SECRETO': 'x' * 40, 'PUERTA_POC_CLAVE': 'clave-poc',
-            'PUERTA_CLIENTES': str(tmp_path / 'clientes.json')}
+    return {'PUERTA_URL': URL, 'PUERTA_SECRETO': 'x' * 40, 'ODOO_URL': ODOO,
+            'PUERTA_ODOO_SECRETO': SECRETO_ODOO.decode(), 'PUERTA_CLIENTES': str(tmp_path / 'c.json')}
 
 
 @contextlib.asynccontextmanager
-async def abrir(entorno):
-    servidor, app, proveedor = armar(Config(entorno))
-    async with servidor.session_manager.run():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=URL) as c:
-            yield c
+async def abrir(tmp_path, mundo):
+    app = armar(Config(entorno(tmp_path)), transporte=httpx.MockTransport(mundo))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=URL) as c:
+        yield c
 
 
-def test_firmas():
-    s = b'y' * 40
-    texto = firmar(s, 'acceso', {'sub': 'a'}, 60)
-    assert leer(s, 'acceso', texto)['sub'] == 'a'
-    assert leer(s, 'codigo', texto) is None
-    assert leer(b'z' * 40, 'acceso', texto) is None
-    assert leer(s, 'acceso', firmar(s, 'acceso', {}, -1)) is None
-    assert leer(s, 'acceso', 'basura') is None
-
-
-async def _registrar(c):
+async def iniciar_sesion(c, conexion=7):
     r = await c.post('/register', json={'redirect_uris': [CALLBACK], 'client_name': 'Claude',
                                          'token_endpoint_auth_method': 'none',
                                          'grant_types': ['authorization_code', 'refresh_token'],
                                          'response_types': ['code']})
-    assert r.status_code == 201, r.text
-    return r.json()['client_id']
-
-
-async def _flujo(c):
-    client_id = await _registrar(c)
+    client_id = r.json()['client_id']
     verificador = secrets.token_urlsafe(48)
     desafio = base64.urlsafe_b64encode(hashlib.sha256(verificador.encode()).digest()).rstrip(b'=').decode()
     r = await c.get('/authorize', params={
         'response_type': 'code', 'client_id': client_id, 'redirect_uri': CALLBACK,
-        'code_challenge': desafio, 'code_challenge_method': 'S256', 'state': 'abc',
-        'resource': URL + '/mcp'})
+        'code_challenge': desafio, 'code_challenge_method': 'S256', 'state': 'abc'})
+    destino = urlparse(r.headers['location'])
+    assert destino.geturl().startswith(ODOO + '/my/claude/autorizar?')
+    pedido = parse_qs(destino.query)['pedido'][0]
+    # Lo que hace Odoo después del inicio de sesión:
+    respuesta = firmar(SECRETO_ODOO, 'respuesta', {
+        'ph': hashlib.sha256(pedido.encode()).hexdigest(), 'con': conexion, 'h': HOST}, 300)
+    r = await c.get('/volver', params={'pedido': pedido, 'respuesta': respuesta})
     assert r.status_code == 302, r.text
-    entrar = urlparse(r.headers['location'])
-    assert entrar.path == '/entrar'
-    pedido = parse_qs(entrar.query)['pedido'][0]
-    assert (await c.get('/entrar', params={'pedido': pedido})).status_code == 200
-    mala = await c.post('/entrar', data={'pedido': pedido, 'clave': 'otra'})
-    assert mala.status_code == 401
-    r = await c.post('/entrar', data={'pedido': pedido, 'clave': 'clave-poc'})
-    assert r.status_code == 302
     vuelta = urlparse(r.headers['location'])
     assert vuelta.geturl().startswith(CALLBACK)
-    q = parse_qs(vuelta.query)
-    assert q['state'] == ['abc']
-    r = await c.post('/token', data={'grant_type': 'authorization_code', 'code': q['code'][0],
+    codigo = parse_qs(vuelta.query)['code'][0]
+    r = await c.post('/token', data={'grant_type': 'authorization_code', 'code': codigo,
                                      'redirect_uri': CALLBACK, 'client_id': client_id,
                                      'code_verifier': verificador})
     assert r.status_code == 200, r.text
-    return client_id, r.json()
+    return client_id, r.json(), pedido
 
 
-async def _llamar(c, token):
-    h = {'Authorization': 'Bearer %s' % token, 'Accept': 'application/json, text/event-stream',
-         'Content-Type': 'application/json'}
-    r = await c.post('/mcp', headers=h, json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
-        'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 't', 'version': '1'}}})
-    assert r.status_code == 200, r.text
-    h['mcp-session-id'] = r.headers['mcp-session-id']
-    h['mcp-protocol-version'] = '2025-06-18'
-    await c.post('/mcp', headers=h, json={'jsonrpc': '2.0', 'method': 'notifications/initialized'})
-    r = await c.post('/mcp', headers=h, json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
-                                              'params': {'name': 'quien_soy', 'arguments': {}}})
-    assert r.status_code == 200, r.text
-    linea = [l for l in r.text.splitlines() if l.startswith('data:')][-1] if 'data:' in r.text else r.text
-    return json.loads(linea.removeprefix('data:').strip())
+def llamar(c, token, **extra):
+    return c.post('/mcp', headers={'Authorization': 'Bearer %s' % token, 'Accept': 'application/json, text/event-stream',
+                                   'Content-Type': 'application/json', **extra},
+                  json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}})
 
 
-async def test_descubrimiento(entorno):
-    async with abrir(entorno) as cliente:
-        r = await cliente.get('/.well-known/oauth-authorization-server')
-        assert r.status_code == 200
-        datos = r.json()
-        assert datos['registration_endpoint'] == URL + '/register'
-        assert 'S256' in datos['code_challenge_methods_supported']
-        r = await cliente.get('/.well-known/oauth-protected-resource/mcp')
-        assert r.status_code == 200, r.text
+def test_firmas_y_clave():
+    s = b'y' * 40
+    assert leer(s, 'acceso', firmar(s, 'acceso', {'a': 1}, 60))['a'] == 1
+    assert leer(s, 'codigo', firmar(s, 'acceso', {}, 60)) is None
+    assert clave_del_enlace(s, 7) == clave_del_enlace(s, 7) != clave_del_enlace(s, 8)
+    assert len(clave_del_enlace(s, 7)) == 43
 
 
-async def test_sin_credencial_pide_iniciar_sesion(entorno):
-    async with abrir(entorno) as cliente:
-        r = await cliente.post('/mcp', json={})
+def test_secretos_distintos(tmp_path):
+    datos = dict(entorno(tmp_path), PUERTA_ODOO_SECRETO='x' * 40)
+    try:
+        Config(datos)
+    except ValueError:
+        return
+    raise AssertionError('tenía que fallar')
+
+
+async def test_descubrimiento_y_sin_credencial(tmp_path):
+    async with abrir(tmp_path, Mundo()) as c:
+        assert (await c.get('/.well-known/oauth-authorization-server')).json()['issuer'] == URL
+        r = await c.get('/.well-known/oauth-protected-resource/mcp')
+        assert r.json()['resource'] == URL + '/mcp'
+        r = await c.post('/mcp', json={})
         assert r.status_code == 401
-        assert 'resource_metadata' in r.headers.get('www-authenticate', '')
+        assert 'resource_metadata' in r.headers['www-authenticate']
 
 
-async def test_flujo_completo_y_renovacion(entorno):
-    async with abrir(entorno) as cliente:
-        client_id, credenciales = await _flujo(cliente)
-        assert credenciales['expires_in'] == 300
-        respuesta = await _llamar(cliente, credenciales['access_token'])
-        texto = json.dumps(respuesta)
-        assert 'persona-de-prueba' in texto and 'Claude' in texto
-        r = await cliente.post('/token', data={'grant_type': 'refresh_token',
-                                               'refresh_token': credenciales['refresh_token'],
-                                               'client_id': client_id})
+async def test_inicio_de_sesion_y_reenvio(tmp_path):
+    mundo = Mundo()
+    async with abrir(tmp_path, mundo) as c:
+        _cid, credenciales, _ = await iniciar_sesion(c)
+        assert credenciales['expires_in'] == 3600
+        r = await llamar(c, credenciales['access_token'])
         assert r.status_code == 200, r.text
-        assert 'persona-de-prueba' in json.dumps(await _llamar(cliente, r.json()['access_token']))
+        assert r.json()['result'] == {'ok': True}
+        assert r.headers['mcp-session-id'] == 's1'
+        assert mundo.pedidos[-1].headers['host'] == HOST
 
 
-async def test_un_codigo_no_sirve_de_credencial(entorno):
-    async with abrir(entorno) as cliente:
-        _client_id, credenciales = await _flujo(cliente)
-        r = await cliente.post('/mcp', headers={'Authorization': 'Bearer %s' % credenciales['refresh_token']},
-                               json={})
+async def test_volver_rechaza_respuestas_ajenas(tmp_path):
+    async with abrir(tmp_path, Mundo()) as c:
+        _cid, _cred, pedido = await iniciar_sesion(c)
+        otra = firmar(SECRETO_ODOO, 'respuesta', {'ph': 'otro', 'con': 7, 'h': HOST}, 300)
+        assert (await c.get('/volver', params={'pedido': pedido, 'respuesta': otra})).status_code == 400
+        falsa = firmar(b'z' * 40, 'respuesta', {'ph': hashlib.sha256(pedido.encode()).hexdigest(),
+                                                'con': 7, 'h': HOST}, 300)
+        assert (await c.get('/volver', params={'pedido': pedido, 'respuesta': falsa})).status_code == 400
+
+
+async def test_renovacion_pregunta_a_odoo(tmp_path):
+    mundo = Mundo()
+    async with abrir(tmp_path, mundo) as c:
+        client_id, credenciales, _ = await iniciar_sesion(c)
+        datos = {'grant_type': 'refresh_token', 'refresh_token': credenciales['refresh_token'], 'client_id': client_id}
+        r = await c.post('/token', data=datos)
+        assert r.status_code == 200, r.text
+        assert any(p.url.host == 'odoo.example' for p in mundo.pedidos)
+        mundo.activa = False
+        r = await c.post('/token', data=datos)
+        assert r.status_code == 400
+        assert r.json()['error'] == 'invalid_grant'
+
+
+async def test_sin_servidor_pide_iniciar_sesion_de_nuevo(tmp_path):
+    mundo = Mundo()
+    async with abrir(tmp_path, mundo) as c:
+        _cid, credenciales, _ = await iniciar_sesion(c)
+        mundo.servidor_existe = False
+        r = await llamar(c, credenciales['access_token'])
         assert r.status_code == 401
+        assert 'resource_metadata' in r.headers['www-authenticate']
 
 
-async def test_registro_sobrevive_al_reinicio(entorno):
-    servidor, app, _ = armar(Config(entorno))
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=URL) as c:
-        client_id = await _registrar(c)
-    _s, _a, otro = armar(Config(entorno))
-    assert await otro.get_client(client_id) is not None
+async def test_la_renovacion_no_sirve_de_credencial(tmp_path):
+    async with abrir(tmp_path, Mundo()) as c:
+        _cid, credenciales, _ = await iniciar_sesion(c)
+        assert (await llamar(c, credenciales['refresh_token'])).status_code == 401
+
+
+async def test_registro_sobrevive_al_reinicio(tmp_path):
+    async with abrir(tmp_path, Mundo()) as c:
+        client_id, _cred, _ = await iniciar_sesion(c)
+    otra = armar(Config(entorno(tmp_path)))
+    assert await otra.state.proveedor.get_client(client_id) is not None

@@ -39,3 +39,18 @@ def leer(secreto: bytes, tipo: str, texto: str) -> dict | None:
     if datos.get('t') != tipo or datos.get('exp', 0) < time.time():
         return None
     return datos
+
+
+def clave_del_enlace(secreto: bytes, conexion_id: int) -> str:
+    """La clave del servidor de una persona, derivada del secreto compartido con Odoo.
+
+    Odoo la calcula igual al pedir el servidor y manda solo su huella al
+    intermedio. Así la puerta puede llegar al servidor de cada persona sin que
+    nadie guarde ni muestre su clave.
+    """
+    return _b64(hmac.new(secreto, b'enlace:%d' % int(conexion_id), hashlib.sha256).digest())
+
+
+def firma_hex(secreto: bytes, fecha: str, cuerpo: bytes) -> str:
+    """Firma de un pedido entre la puerta y Odoo, como la del intermedio."""
+    return hmac.new(secreto, fecha.encode() + b'.' + cuerpo, hashlib.sha256).hexdigest()
