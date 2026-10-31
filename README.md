@@ -7,7 +7,7 @@ El diseño completo, con las decisiones y el paso a paso, está en `wansoft_addo
 | Carpeta | Qué es | Paso |
 |---|---|---|
 | `servidor/` | El servidor MCP del cliente, uno por persona (imagen `ghcr.io/wansoft-tech/mcp-cliente`) | 03 (tarea 11393) |
-| `intermedio/` | Levanta y elimina los servidores en Easypanel | 06 (tarea 11396), todavía no existe |
+| `intermedio/` | Levanta y elimina los servidores en Easypanel (imagen `ghcr.io/wansoft-tech/mcp-provisioner`) | 06 (tarea 11396) |
 
 ## Servidor
 
@@ -52,3 +52,31 @@ Una etiqueta `servidor-v<versión>` corre los tests y, si pasan, publica `ghcr.i
 ```bash
 git tag servidor-v0.1.0 && git push origin servidor-v0.1.0
 ```
+
+## Intermedio
+
+Un solo servicio en Easypanel, en el proyecto `clientes-mcp`, con dominio público `provisioner.mcp.wansoft.tech`. Lo llama el Odoo de Wansoft y **solo responde a pedidos firmados**. Es el único que tiene el token de Easypanel.
+
+| Ruta | Hace |
+|---|---|
+| `POST /connections` | Crea o actualiza el servidor de una persona: servicio, imagen, variables, dominio y deploy. Espera hasta 20 segundos a que responda |
+| `GET /connections/{id}` | Si el servicio existe y responde |
+| `DELETE /connections/{id}` | Elimina el servicio, con su dominio. Repetirlo no falla |
+| `GET /health` | `{"status": "ok"}`, sin firma |
+
+**Firma.** Cabeceras `X-Wansoft-Origen` (la dirección del Odoo que llama), `X-Wansoft-Fecha` (segundos Unix) y `X-Wansoft-Firma`: HMAC-SHA256 en hexadecimal de `<fecha>.<cuerpo>`, con el secreto de ese origen. Se rechazan las de más de 5 minutos.
+
+**Un secreto y un prefijo por origen.** Producción crea `c-<id>` y staging `s-<id>`, cada uno con la API de Wansoft de su origen. Staging es una copia de producción: si compartieran secreto, una prueba en staging podría pisar el servidor de un cliente real.
+
+### Variables de entorno
+
+| Variable | Valor |
+|---|---|
+| `EASYPANEL_URL` | Dirección del panel vista desde el contenedor (`http://easypanel:3000` o la de Tailscale) |
+| `EASYPANEL_TOKEN` | La clave de API del usuario de Easypanel. **Solo existe acá** |
+| `MCP_IMAGE` | `ghcr.io/wansoft-tech/mcp-cliente:<versión>` |
+| `MCP_DOMAIN` | `mcp.wansoft.tech` |
+| `MCP_PROJECT` | `clientes-mcp` (por defecto) |
+| `ORIGENES` | Una línea por Odoo: `<url> <prefijo> <secreto>`, por ejemplo `https://gnbsas.odoo.com c <secreto>`. Secretos de 32 caracteres o más |
+
+Nunca registra cuerpos ni variables: llevan la clave de API del cliente.
