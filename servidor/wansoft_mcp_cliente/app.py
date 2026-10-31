@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import os
+import urllib.request
 
 from mcp_server_odoo.config import load_config
 from mcp_server_odoo.server import OdooMCPServer
@@ -91,6 +92,28 @@ def configurar_original(nivel, entorno=os.environ) -> None:
         entorno['ODOO_MCP_ENABLE_METHOD_CALLS'] = 'true'
 
 
+def detectar_base(entorno=os.environ, timeout=15) -> None:
+    """Completa ODOO_DB si viene vacío o en «auto», preguntándole a su Odoo.
+
+    Odoo.sh cambia el nombre de la base de staging cada vez que arma una copia
+    nueva. /web/database/list responde aunque la lista por XML-RPC esté
+    cerrada: si hay una sola base, es esa. Así un servidor de staging se
+    reinicia y sigue andando sin que nadie cambie nada.
+    """
+    if (entorno.get('ODOO_DB') or '').strip().lower() not in ('', 'auto'):
+        return
+    url = entorno['ODOO_URL'].rstrip('/') + '/web/database/list'
+    cuerpo = json.dumps({'jsonrpc': '2.0', 'method': 'call', 'params': {}}).encode()
+    pedido = urllib.request.Request(url, data=cuerpo, method='POST',
+                                    headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(pedido, timeout=timeout) as respuesta:
+        bases = (json.loads(respuesta.read()) or {}).get('result') or []
+    if len(bases) != 1:
+        raise ValueError('No se pudo detectar la base de %s: hay %d. Cargá ODOO_DB.'
+                         % (entorno['ODOO_URL'], len(bases)))
+    entorno['ODOO_DB'] = bases[0]
+
+
 def forzar_solo_lectura(entorno=os.environ) -> None:
     configurar_original('lectura', entorno)
 
@@ -98,6 +121,7 @@ def forzar_solo_lectura(entorno=os.environ) -> None:
 def armar_servidor() -> OdooMCPServer:
     perfil, nivel = perfil_y_nivel()
     configurar_original(nivel)
+    detectar_base()
     # load_config y no get_config: este lee el entorno una sola vez y lo
     # guarda, y el nivel se acaba de fijar en el entorno.
     config = load_config()

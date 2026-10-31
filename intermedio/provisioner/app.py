@@ -124,7 +124,8 @@ def crear_o_actualizar(config, panel, origen, datos, perfil='cliente'):
     variables = {
         'MCP_PERFIL': perfil,
         'ODOO_URL': odoo['url'],
-        'ODOO_DB': odoo['db'],
+        # Vacío: el servidor la detecta al arrancar (staging cambia de nombre).
+        'ODOO_DB': odoo.get('db') or None,
         'ODOO_USER': odoo['user'],
         'ODOO_API_KEY': odoo['api_key'],
         'ODOO_ALLOWED_COMPANIES': odoo.get('allowed_companies') or None,
@@ -184,6 +185,20 @@ def cambiar_nivel(config, panel, origen, conexion_id, nivel):
     return {'servicio': servicio, 'nivel': nivel}
 
 
+def reiniciar(config, panel, origen, conexion_id, perfil='equipo'):
+    """Vuelve a desplegar el servidor sin tocar sus variables.
+
+    Sirve cuando su Odoo cambió el nombre de la base —staging, cada vez que
+    Odoo.sh arma una copia nueva—: el servidor la detecta al arrancar. No hace
+    falta la clave de API, que sigue en las variables del servicio.
+    """
+    servicio = _nombre(config, origen, conexion_id, perfil)
+    if not panel.existe_servicio(config.proyecto, servicio):
+        raise ValueError('El servicio %s no existe.' % servicio)
+    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    return {'servicio': servicio, 'reiniciado': True}
+
+
 def eliminar(config, panel, origen, conexion_id, perfil='cliente'):
     servicio = _nombre(config, origen, conexion_id, perfil)
     if panel.existe_servicio(config.proyecto, servicio):
@@ -238,6 +253,19 @@ def armar_app(config=None, panel=None):
             return JSONResponse(resultado)
         return ruta
 
+    async def reinicio(request):
+        origen, _cuerpo, error = await _verificar(request, config)
+        if error:
+            return error
+        try:
+            resultado = await run_in_threadpool(
+                reiniciar, config, panel, origen, int(request.path_params['conexion_id']))
+        except ValueError as error:
+            return _error(str(error), 400)
+        except ErrorEasypanel as error:
+            return _falla(error)
+        return JSONResponse(resultado)
+
     async def nivel(request):
         origen, cuerpo, error = await _verificar(request, config)
         if error:
@@ -259,4 +287,5 @@ def armar_app(config=None, panel=None):
         Route('/connections/{conexion_id:int}/nivel', nivel, methods=['POST']),
         Route('/equipo', alta('equipo'), methods=['POST']),
         Route('/equipo/{conexion_id:int}', una('equipo'), methods=['GET', 'DELETE']),
+        Route('/equipo/{conexion_id:int}/reiniciar', reinicio, methods=['POST']),
     ])

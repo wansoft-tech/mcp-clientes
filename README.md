@@ -14,6 +14,7 @@ El diseño completo, con las decisiones y el paso a paso, está en `wansoft_addo
 Se apoya en [`mcp-server-odoo`](https://pypi.org/project/mcp-server-odoo/) 0.9.0 (licencia MPL 2.0) como dependencia, sin modificar sus archivos. Encima agrega:
 
 - **Perfil y nivel.** `MCP_PERFIL=cliente` (por defecto) con `MCP_NIVEL` `lectura` (por defecto), `escritura` (crear y modificar) o `metodos` (además, ejecutar acciones); borrar, nunca. `MCP_PERFIL=equipo`: todo, borrar incluido, sin herramientas de Wansoft. Lo que el nivel no permite no existe en el servidor.
+- **Base detectada.** Si `ODOO_DB` viene vacío o en `auto`, el servidor le pregunta a su Odoo por `/web/database/list` al arrancar, y si hay una sola base usa esa. Odoo.sh responde aunque la lista por XML-RPC esté cerrada.
 - **Clave del enlace.** Solo atiende `/<clave>/mcp`. Compara la huella SHA-256 de la clave con `MCP_LINK_SECRET_SHA256` en tiempo constante. Cualquier otra ruta o clave responde 404. `/health` queda abierto y responde `{"status": "ok"}`, sin más datos.
 - **El nivel manda, no el entorno.** `ODOO_YOLO` y `ODOO_MCP_ENABLE_METHOD_CALLS` se fijan según el nivel aunque vengan otros valores, y solo quedan las herramientas de la lista de permitidas del nivel (`app.py`).
 - **Herramientas de Wansoft**, con prefijo `wansoft_`. No dependen de que la base del cliente responda: si su Odoo está caído, igual puede abrir una consulta.
@@ -65,6 +66,7 @@ Un solo servicio en Easypanel, en el proyecto `clientes-mcp`, con dominio públi
 | `GET /connections/{id}` | Si el servicio existe y responde |
 | `DELETE /connections/{id}` | Elimina el servicio, con su dominio. Repetirlo no falla |
 | `POST /equipo`, `GET` y `DELETE /equipo/{id}` | Lo mismo para el servidor del equipo de Wansoft sobre una base del cliente (`ce-<id>`): perfil `equipo`, acceso completo |
+| `POST /equipo/{id}/reiniciar` | Vuelve a desplegar sin tocar las variables, para que detecte la base de nuevo (staging cambia de nombre cada vez que Odoo.sh arma una copia) |
 | `GET /health` | `{"status": "ok"}`, sin firma |
 
 **Firma.** Cabeceras `X-Wansoft-Origen` (la dirección del Odoo que llama), `X-Wansoft-Fecha` (segundos Unix) y `X-Wansoft-Firma`: HMAC-SHA256 en hexadecimal de `<fecha>.<cuerpo>`, con el secreto de ese origen. Se rechazan las de más de 5 minutos.

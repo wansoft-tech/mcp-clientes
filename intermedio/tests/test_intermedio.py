@@ -488,3 +488,27 @@ def test_equipo(cliente, panel):
     assert cliente.delete('/connections/3', headers=firmar(b'')).json()['servicio'] == 'c-3'
     assert cliente.delete('/equipo/3', headers=firmar(b'')).json()['servicio'] == 'ce-3'
     assert 'ce-3' not in panel.servicios
+
+
+def test_equipo_sin_base_la_deja_vacia_y_reinicia(cliente, panel):
+    cuerpo = json.dumps({
+        'id': 4,
+        'odoo': {'url': 'https://cliente.odoo.com', 'db': '', 'user': 'soporte', 'api_key': 'k'},
+        'link_secret_sha256': HUELLA,
+    }).encode()
+    assert cliente.post('/equipo', content=cuerpo, headers=firmar(cuerpo)).status_code == 200
+    assert _env_de(panel, 'ce-4')['ODOO_DB'] == ''
+    antes = dict(panel.envs)
+    respuesta = cliente.post('/equipo/4/reiniciar', content=b'', headers=firmar(b''))
+    assert respuesta.status_code == 200, respuesta.text
+    assert panel.procedimientos()[-1] == 'services.app.deployService'
+    assert panel.envs == antes  # no toca las variables
+
+
+def test_reiniciar_algo_que_no_existe(cliente, panel):
+    respuesta = cliente.post('/equipo/77/reiniciar', content=b'', headers=firmar(b''))
+    assert respuesta.status_code == 400
+
+
+def test_reiniciar_sin_firma(cliente, panel):
+    assert cliente.post('/equipo/4/reiniciar', content=b'').status_code == 401

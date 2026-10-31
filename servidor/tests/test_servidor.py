@@ -220,3 +220,54 @@ def test_valor_desconocido_no_abre_nada(entorno, monkeypatch):
         _armar(monkeypatch, MCP_NIVEL='todo')
     with _pytest.raises(ValueError):
         _armar(monkeypatch, MCP_PERFIL='admin')
+
+
+# -- Base detectada ------------------------------------------------------------
+class OdooConUnaBase(BaseHTTPRequestHandler):
+    bases = ['cliente-staging-123']
+
+    def do_POST(self):
+        datos = json.dumps({'jsonrpc': '2.0', 'id': None, 'result': self.bases}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(datos)))
+        self.end_headers()
+        self.wfile.write(datos)
+
+    def log_message(self, *args):
+        pass
+
+
+def _odoo_falso(bases):
+    OdooConUnaBase.bases = bases
+    servidor = HTTPServer(('127.0.0.1', 0), OdooConUnaBase)
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
+    return servidor
+
+
+def test_detecta_la_base():
+    from wansoft_mcp_cliente.app import detectar_base
+    odoo = _odoo_falso(['cliente-staging-123'])
+    try:
+        entorno = {'ODOO_URL': 'http://127.0.0.1:%d' % odoo.server_port, 'ODOO_DB': ''}
+        detectar_base(entorno)
+        assert entorno['ODOO_DB'] == 'cliente-staging-123'
+    finally:
+        odoo.shutdown()
+
+
+def test_no_toca_una_base_cargada():
+    from wansoft_mcp_cliente.app import detectar_base
+    entorno = {'ODOO_URL': 'http://no-se-llama', 'ODOO_DB': 'fija'}
+    detectar_base(entorno)
+    assert entorno['ODOO_DB'] == 'fija'
+
+
+def test_varias_bases_no_adivina():
+    from wansoft_mcp_cliente.app import detectar_base
+    odoo = _odoo_falso(['una', 'otra'])
+    try:
+        with pytest.raises(ValueError):
+            detectar_base({'ODOO_URL': 'http://127.0.0.1:%d' % odoo.server_port, 'ODOO_DB': 'auto'})
+    finally:
+        odoo.shutdown()
