@@ -1,11 +1,19 @@
-"""Arma el servidor: mcp-server-odoo en solo lectura, más Wansoft, detrás de la clave del enlace.
+"""Arma el servidor: mcp-server-odoo con lo que su perfil y su nivel permiten, detrás de la clave del enlace.
 
-Sobre mcp-server-odoo 0.9.0, sin modificar sus archivos:
+Sobre mcp-server-odoo 0.9.0, sin modificar sus archivos. Dos perfiles, por
+la variable MCP_PERFIL:
 
-1. Solo lectura forzada. ODOO_YOLO=read antes de leer la configuración, y las
-   herramientas que no están en LECTURA se sacan del servidor: en modo read el
-   original las registra igual y las rechaza al llamarlas; acá ni existen.
-2. Las herramientas de Wansoft, con prefijo wansoft_.
+- «cliente» (por defecto): una persona del cliente. Su nivel, MCP_NIVEL, lo
+  elige el líder del proyecto: lectura (por defecto), escritura o métodos.
+  Borrar, nunca. Suma las herramientas de Wansoft.
+- «equipo»: el equipo de Wansoft sobre una base del cliente. Todo, borrar
+  incluido, y sin herramientas de Wansoft.
+
+1. Lo que el nivel no permite no existe en el servidor: se sacan todas las
+   herramientas que no están en su lista de permitidas. Una lista de
+   permitidas y no de prohibidas: una herramienta nueva de una versión futura
+   del original queda afuera hasta que alguien la sume a propósito.
+2. Las herramientas de Wansoft, con prefijo wansoft_, solo en el perfil cliente.
 3. Las instrucciones para Claude, en español.
 4. La clave del enlace: solo se atiende /<clave>/mcp. Cualquier otra ruta o
    clave responde 404 sin tocar Odoo. /health queda abierto y no dice nada.
@@ -15,16 +23,13 @@ import hmac
 import json
 import os
 
-from mcp_server_odoo.config import get_config
+from mcp_server_odoo.config import load_config
 from mcp_server_odoo.server import OdooMCPServer
 from mcp_server_odoo.user_context import usage_guidance
 
 from . import wansoft
-from .instrucciones import INSTRUCCIONES
+from .instrucciones import INSTRUCCIONES_EQUIPO, instrucciones_cliente
 
-# Lo único que el servidor del cliente puede hacer en su base. Una lista de
-# permitidas y no de prohibidas: una herramienta nueva de una versión futura
-# del original queda afuera hasta que alguien la sume a propósito.
 LECTURA = frozenset({
     'search_records',
     'get_record',
@@ -37,33 +42,85 @@ LECTURA = frozenset({
     'list_record_attachments',
 })
 
+# Crear y modificar. Borrar (delete_record) no está: para el cliente, nunca.
+ESCRITURA = LECTURA | frozenset({
+    'create_record',
+    'create_records',
+    'update_record',
+    'update_records',
+    'post_message',
+    'upload_attachment',
+})
+METODOS = ESCRITURA | frozenset({'call_model_method'})
+EQUIPO = METODOS | frozenset({'delete_record'})
+
+NIVELES = {'lectura': LECTURA, 'escritura': ESCRITURA, 'metodos': METODOS}
+
 RUTA_MCP = '/mcp'
 
 
-def forzar_solo_lectura(entorno=os.environ) -> None:
-    entorno['ODOO_YOLO'] = 'read'
-    entorno.pop('ODOO_MCP_ENABLE_METHOD_CALLS', None)
+def perfil_y_nivel(entorno=os.environ):
+    """El perfil y el nivel pedidos. Un valor desconocido no abre nada: falla."""
+    perfil = entorno.get('MCP_PERFIL', 'cliente')
+    if perfil == 'equipo':
+        return perfil, 'equipo'
+    if perfil != 'cliente':
+        raise ValueError('MCP_PERFIL tiene que ser cliente o equipo.')
+    nivel = entorno.get('MCP_NIVEL', 'lectura')
+    if nivel not in NIVELES:
+        raise ValueError('MCP_NIVEL tiene que ser lectura, escritura o metodos.')
+    return perfil, nivel
+
+
+def configurar_original(nivel, entorno=os.environ) -> None:
+    """Lo que el original necesita para registrar las herramientas del nivel.
+
+    El original solo registra las de escritura con ODOO_YOLO=true y la de
+    métodos con ODOO_MCP_ENABLE_METHOD_CALLS. Lo que el nivel no permite se
+    saca después igual.
+    """
     entorno['ODOO_MCP_TRANSPORT'] = 'streamable-http'
+    if nivel == 'lectura':
+        entorno['ODOO_YOLO'] = 'read'
+        entorno.pop('ODOO_MCP_ENABLE_METHOD_CALLS', None)
+    elif nivel == 'escritura':
+        entorno['ODOO_YOLO'] = 'true'
+        entorno.pop('ODOO_MCP_ENABLE_METHOD_CALLS', None)
+    else:
+        entorno['ODOO_YOLO'] = 'true'
+        entorno['ODOO_MCP_ENABLE_METHOD_CALLS'] = 'true'
+
+
+def forzar_solo_lectura(entorno=os.environ) -> None:
+    configurar_original('lectura', entorno)
 
 
 def armar_servidor() -> OdooMCPServer:
-    forzar_solo_lectura()
-    config = get_config()
+    perfil, nivel = perfil_y_nivel()
+    configurar_original(nivel)
+    # load_config y no get_config: este lee el entorno una sola vez y lo
+    # guarda, y el nivel se acaba de fijar en el entorno.
+    config = load_config()
     servidor = OdooMCPServer(config)
     app = servidor.app
 
+    permitidas = EQUIPO if perfil == 'equipo' else NIVELES[nivel]
     for herramienta in list(app._tool_manager.list_tools()):
-        if herramienta.name not in LECTURA:
+        if herramienta.name not in permitidas:
             app.remove_tool(herramienta.name)
 
-    api = wansoft.ApiWansoft(os.environ['WANSOFT_API_URL'], os.environ['WANSOFT_TOKEN'])
-    wansoft.registrar(app, api)
-    separar_wansoft_de_su_base(app)
+    if perfil == 'cliente':
+        api = wansoft.ApiWansoft(os.environ['WANSOFT_API_URL'], os.environ['WANSOFT_TOKEN'])
+        wansoft.registrar(app, api)
+        separar_wansoft_de_su_base(app)
+        instrucciones = instrucciones_cliente(nivel)
+    else:
+        instrucciones = INSTRUCCIONES_EQUIPO
 
     # El original personaliza las instrucciones con el usuario conectado a
     # partir de _static_instructions: se reemplaza esa base.
     uso = usage_guidance(h.name for h in app._tool_manager.list_tools())
-    servidor._static_instructions = '%s\n\n%s' % (INSTRUCCIONES, uso) if uso else INSTRUCCIONES
+    servidor._static_instructions = '%s\n\n%s' % (instrucciones, uso) if uso else instrucciones
     app._lowlevel_server.instructions = servidor._static_instructions
     return servidor
 

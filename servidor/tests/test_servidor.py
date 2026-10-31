@@ -172,3 +172,51 @@ async def test_wansoft_responde_aunque_su_base_no(corriendo):
             assert su_base.is_error
             assert 'cliente.example' not in su_base.content[0].text
             assert not (await sesion.call_tool('wansoft_mi_equipo', {})).is_error
+
+
+# -- Perfiles y niveles ------------------------------------------------------
+def _armar(monkeypatch, **variables):
+    for clave, valor in variables.items():
+        monkeypatch.setenv(clave, valor)
+    from wansoft_mcp_cliente.app import armar_servidor
+    return armar_servidor()
+
+
+def test_nivel_por_defecto_es_lectura(entorno, monkeypatch):
+    monkeypatch.delenv('MCP_NIVEL', raising=False)
+    servidor = _armar(monkeypatch)
+    assert 'create_record' not in nombres(servidor)
+    assert 'SOLO LECTURA' in servidor.app.instructions
+
+
+def test_nivel_escritura(entorno, monkeypatch):
+    servidor = _armar(monkeypatch, MCP_NIVEL='escritura')
+    herramientas = nombres(servidor)
+    assert {'create_record', 'update_record', 'wansoft_mis_tareas'} <= herramientas
+    assert 'delete_record' not in herramientas
+    assert 'call_model_method' not in herramientas
+
+
+def test_nivel_metodos(entorno, monkeypatch):
+    servidor = _armar(monkeypatch, MCP_NIVEL='metodos')
+    herramientas = nombres(servidor)
+    assert {'create_record', 'call_model_method'} <= herramientas
+    assert 'delete_record' not in herramientas
+
+
+def test_perfil_equipo(entorno, monkeypatch):
+    monkeypatch.delenv('WANSOFT_API_URL')
+    monkeypatch.delenv('WANSOFT_TOKEN')
+    servidor = _armar(monkeypatch, MCP_PERFIL='equipo', MCP_NIVEL='lectura')
+    herramientas = nombres(servidor)
+    assert {'delete_record', 'call_model_method', 'create_record'} <= herramientas
+    assert not [h for h in herramientas if h.startswith('wansoft_')]
+    assert 'equipo de Wansoft' in servidor.app.instructions
+
+
+def test_valor_desconocido_no_abre_nada(entorno, monkeypatch):
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _armar(monkeypatch, MCP_NIVEL='todo')
+    with _pytest.raises(ValueError):
+        _armar(monkeypatch, MCP_PERFIL='admin')
