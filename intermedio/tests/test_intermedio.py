@@ -141,8 +141,8 @@ def test_alta_completa(cliente, panel):
     assert respuesta.json() == {'servicio': 'c-12', 'host': 'c-12.mcp.wansoft.tech', 'listo': True}
     assert panel.procedimientos() == [
         'projects.createProject', 'services.app.createService', 'services.app.updateSourceImage',
-        'services.app.updateEnv', 'domains.createDomain', 'services.app.startService',
-        'services.app.deployService']
+        'services.app.updateEnv', 'domains.createDomain', 'services.app.updateSourceImage',
+        'services.app.startService', 'services.app.deployService']
     env = [e for t, p, e in panel.llamadas if p == 'services.app.updateEnv'][0]['env']
     assert 'ODOO_API_KEY=clave-api' in env
     assert 'MCP_LINK_SECRET_SHA256=%s' % HUELLA in env
@@ -543,7 +543,10 @@ def test_reiniciar_enciende_un_servicio_detenido(cliente, panel):
     cuerpo = b''
     respuesta = cliente.post('/equipo/7/reiniciar', content=cuerpo, headers=firmar(cuerpo))
     assert respuesta.status_code == 200, respuesta.text
-    assert panel.procedimientos()[-2:] == ['services.app.startService', 'services.app.deployService']
+    assert panel.procedimientos()[-3:] == ['services.app.updateSourceImage', 'services.app.startService',
+                                           'services.app.deployService']
+    imagen = [e for t, p, e in panel.llamadas if p == 'services.app.updateSourceImage'][-1]['image']
+    assert imagen == 'ghcr.io/wansoft-tech/mcp-cliente:0.2.1'
 
 
 def test_si_no_puede_encender_despliega_igual(cliente, panel, monkeypatch):

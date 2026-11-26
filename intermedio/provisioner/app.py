@@ -117,12 +117,17 @@ def _saludable(host):
 
 
 def _encender_y_desplegar(config, panel, servicio):
-    """Despliega el servicio, encendiéndolo antes si estaba detenido.
+    """Despliega el servicio con la imagen actual, encendiéndolo antes si estaba detenido.
 
     Implementar no enciende un servicio detenido a mano en Easypanel: quedaba
     configurado pero sin contenedor (503). Encender uno que ya está corriendo
     no hace nada; si Easypanel lo rechaza, se sigue con el despliegue igual.
     """
+    # Siempre con la imagen actual: un servicio detenido hace tiempo podía
+    # volver con una imagen vieja, sin la pausa ante un arranque fallido, y
+    # reiniciarse sin parar (ce-12, 26/11/2026).
+    panel.escribir('services.app.updateSourceImage', projectName=config.proyecto,
+                   serviceName=servicio, image=config.imagen)
     try:
         panel.escribir('services.app.startService', projectName=config.proyecto, serviceName=servicio)
     except ErrorEasypanel as error:
