@@ -12,7 +12,10 @@ RUN pip install --no-cache-dir . && useradd --create-home --uid 1000 mcp
 
 USER mcp
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+# Chequeo liviano: solo abre el puerto, sin lanzar Python. Espaciado, con
+# margen y varios reintentos: con la CPU del servidor saturada, un chequeo
+# pesado y apurado marcaba sanos como caídos y los reiniciaba en cadena.
+HEALTHCHECK --interval=5m --timeout=30s --start-period=2m --retries=3 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
 
 CMD ["wansoft-mcp-cliente"]
