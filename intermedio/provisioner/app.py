@@ -116,6 +116,20 @@ def _saludable(host):
         return False
 
 
+def _encender_y_desplegar(config, panel, servicio):
+    """Despliega el servicio, encendiéndolo antes si estaba detenido.
+
+    Implementar no enciende un servicio detenido a mano en Easypanel: quedaba
+    configurado pero sin contenedor (503). Encender uno que ya está corriendo
+    no hace nada; si Easypanel lo rechaza, se sigue con el despliegue igual.
+    """
+    try:
+        panel.escribir('services.app.startService', projectName=config.proyecto, serviceName=servicio)
+    except ErrorEasypanel as error:
+        _logger.info('No se pudo encender %s antes de desplegar: %s', servicio, error)
+    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+
+
 def crear_o_actualizar(config, panel, origen, datos, perfil='cliente'):
     conexion_id = int(datos['id'])
     odoo = datos['odoo']
@@ -153,7 +167,7 @@ def crear_o_actualizar(config, panel, origen, datos, perfil='cliente'):
     panel.escribir('services.app.updateEnv', projectName=config.proyecto,
                    serviceName=servicio, env=env)
     panel.asegurar_dominio(config.proyecto, servicio, host, PUERTO_SERVIDOR)
-    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    _encender_y_desplegar(config, panel, servicio)
 
     limite = time.time() + ESPERA_SALUD
     listo = _saludable(host)
@@ -181,7 +195,7 @@ def cambiar_nivel(config, panel, origen, conexion_id, nivel):
     lineas.append('MCP_NIVEL=%s' % nivel)
     panel.escribir('services.app.updateEnv', projectName=config.proyecto,
                    serviceName=servicio, env='\n'.join(lineas))
-    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    _encender_y_desplegar(config, panel, servicio)
     return {'servicio': servicio, 'nivel': nivel}
 
 
@@ -195,7 +209,7 @@ def reiniciar(config, panel, origen, conexion_id, perfil='equipo'):
     servicio = _nombre(config, origen, conexion_id, perfil)
     if not panel.existe_servicio(config.proyecto, servicio):
         raise ValueError('El servicio %s no existe.' % servicio)
-    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    _encender_y_desplegar(config, panel, servicio)
     return {'servicio': servicio, 'reiniciado': True}
 
 
@@ -221,7 +235,7 @@ def cambiar_base(config, panel, origen, conexion_id, url, db=None):
     lineas += ['ODOO_URL=%s' % url.rstrip('/'), 'ODOO_DB=%s' % (db or '')]
     panel.escribir('services.app.updateEnv', projectName=config.proyecto,
                    serviceName=servicio, env='\n'.join(lineas))
-    panel.escribir('services.app.deployService', projectName=config.proyecto, serviceName=servicio)
+    _encender_y_desplegar(config, panel, servicio)
     return {'servicio': servicio, 'url': url.rstrip('/')}
 
 

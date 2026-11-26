@@ -141,7 +141,8 @@ def test_alta_completa(cliente, panel):
     assert respuesta.json() == {'servicio': 'c-12', 'host': 'c-12.mcp.wansoft.tech', 'listo': True}
     assert panel.procedimientos() == [
         'projects.createProject', 'services.app.createService', 'services.app.updateSourceImage',
-        'services.app.updateEnv', 'domains.createDomain', 'services.app.deployService']
+        'services.app.updateEnv', 'domains.createDomain', 'services.app.startService',
+        'services.app.deployService']
     env = [e for t, p, e in panel.llamadas if p == 'services.app.updateEnv'][0]['env']
     assert 'ODOO_API_KEY=clave-api' in env
     assert 'MCP_LINK_SECRET_SHA256=%s' % HUELLA in env
@@ -535,3 +536,28 @@ def test_cambiar_base_rechaza_direcciones_raras(cliente, panel):
     for url in ('http://sin-https.odoo.com', 'https://a.odoo.com\nODOO_YOLO=true'):
         pedido = json.dumps({'url': url}).encode()
         assert cliente.post('/equipo/5/base', content=pedido, headers=firmar(pedido)).status_code == 400
+
+
+def test_reiniciar_enciende_un_servicio_detenido(cliente, panel):
+    panel.servicios.add('ce-7')
+    cuerpo = b''
+    respuesta = cliente.post('/equipo/7/reiniciar', content=cuerpo, headers=firmar(cuerpo))
+    assert respuesta.status_code == 200, respuesta.text
+    assert panel.procedimientos()[-2:] == ['services.app.startService', 'services.app.deployService']
+
+
+def test_si_no_puede_encender_despliega_igual(cliente, panel, monkeypatch):
+    from provisioner.easypanel import ErrorEasypanel
+    panel.servicios.add('ce-7')
+    original = panel.escribir
+
+    def escribir(procedimiento, **entrada):
+        if procedimiento == 'services.app.startService':
+            panel.llamadas.append(('escribir', procedimiento, entrada))
+            raise ErrorEasypanel(procedimiento, 'ya está corriendo', 400)
+        return original(procedimiento, **entrada)
+    monkeypatch.setattr(panel, 'escribir', escribir)
+    cuerpo = b''
+    respuesta = cliente.post('/equipo/7/reiniciar', content=cuerpo, headers=firmar(cuerpo))
+    assert respuesta.status_code == 200, respuesta.text
+    assert panel.procedimientos()[-1] == 'services.app.deployService'
