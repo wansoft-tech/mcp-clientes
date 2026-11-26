@@ -1,3 +1,4 @@
+import sys
 """Lo que tiene que ser cierto del servidor del cliente antes del piloto (§7 del diseño).
 
 Corre sin Odoo: el original conecta recién en la primera llamada a su base.
@@ -336,3 +337,38 @@ def test_transporte_elegido_a_mano_no_se_toca(monkeypatch):
     entorno = {'ODOO_URL': 'https://x.example', 'ODOO_RPC_TRANSPORT': 'json2'}
     modulo.elegir_transporte(entorno)
     assert entorno['ODOO_RPC_TRANSPORT'] == 'json2'
+
+
+def test_pausa_si_falla_el_arranque(monkeypatch):
+    from wansoft_mcp_cliente import __main__ as principal
+    esperas = []
+    monkeypatch.setattr(principal.time, 'sleep', esperas.append)
+    monkeypatch.setenv('MCP_PAUSA_FALLO', '7')
+
+    def falla():
+        raise ValueError('sin base')
+    monkeypatch.setattr(principal, 'armar_servidor', falla)
+    with pytest.raises(SystemExit) as salida:
+        principal.main()
+    assert salida.value.code == 3
+    assert esperas == [7]
+
+
+def test_pausa_si_uvicorn_no_arranca(monkeypatch):
+    from wansoft_mcp_cliente import __main__ as principal
+    esperas = []
+    monkeypatch.setattr(principal.time, 'sleep', esperas.append)
+    monkeypatch.delenv('MCP_PAUSA_FALLO', raising=False)
+
+    class Servidor:
+        class config:
+            host, port = '127.0.0.1', 0
+    monkeypatch.setattr(principal, 'armar_servidor', lambda: Servidor())
+    monkeypatch.setattr(principal, 'armar_app', lambda s: None)
+
+    def uvicorn_falla(*a, **k):
+        sys.exit(3)
+    monkeypatch.setattr(principal.uvicorn, 'run', uvicorn_falla)
+    with pytest.raises(SystemExit):
+        principal.main()
+    assert esperas == [600]
